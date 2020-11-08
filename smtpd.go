@@ -29,7 +29,7 @@ var (
 )
 
 // Handler function called upon successful receipt of an email.
-type Handler func(remoteAddr net.Addr, from string, to []string, data []byte)
+type Handler func(remoteAddr net.Addr, from string, to []string, data []byte, user string, pass string)
 
 // HandlerRcpt function called on RCPT. Return accept status.
 type HandlerRcpt func(remoteAddr net.Addr, from string, to string) bool
@@ -226,7 +226,8 @@ func (s *session) serve() {
 	var gotFrom bool
 	var to []string
 	var buffer bytes.Buffer
-
+	var user string
+	var pass string
 	// Send banner.
 	s.writef("220 %s %s ESMTP Service ready", s.srv.Hostname, s.srv.Appname)
 
@@ -383,7 +384,7 @@ loop:
 
 			// Pass mail on to handler.
 			if s.srv.Handler != nil {
-				go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes())
+				go s.srv.Handler(s.conn.RemoteAddr(), from, to, buffer.Bytes(), user, pass)
 			}
 
 			// Reset for next mail.
@@ -494,7 +495,7 @@ loop:
 			case "PLAIN":
 				s.authenticated, err = s.handleAuthPlain(authArgs)
 			case "LOGIN":
-				s.authenticated, err = s.handleAuthLogin(authArgs)
+				s.authenticated, err, user, pass = s.handleAuthLogin(authArgs)
 			case "CRAM-MD5":
 				s.authenticated, err = s.handleAuthCramMD5()
 			}
@@ -669,37 +670,37 @@ func (s *session) makeEHLOResponse() (response string) {
 	return
 }
 
-func (s *session) handleAuthLogin(arg string) (bool, error) {
+func (s *session) handleAuthLogin(arg string) (bool, error, string, string) {
 	var err error
 
 	if arg == "" {
 		s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Username:")))
 		arg, err = s.readLine()
 		if err != nil {
-			return false, err
+			return false, err, "", ""
 		}
 	}
 
 	username, err := base64.StdEncoding.DecodeString(arg)
 	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
+		return false, errors.New("501 5.5.2 Syntax error (unable to decode)"), "", ""
 	}
 
 	s.writef("334 " + base64.StdEncoding.EncodeToString([]byte("Password:")))
 	line, err := s.readLine()
 	if err != nil {
-		return false, err
+		return false, err, "", ""
 	}
 
 	password, err := base64.StdEncoding.DecodeString(line)
 	if err != nil {
-		return false, errors.New("501 5.5.2 Syntax error (unable to decode)")
+		return false, errors.New("501 5.5.2 Syntax error (unable to decode)"), "", ""
 	}
 
 	// Validate credentials.
 	authenticated, err := s.srv.AuthHandler(s.conn.RemoteAddr(), "LOGIN", username, password, nil)
 
-	return authenticated, err
+	return authenticated, err, string(username), string(password)
 }
 
 func (s *session) handleAuthPlain(arg string) (bool, error) {
